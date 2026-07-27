@@ -22,7 +22,7 @@ st.write("""
 Welcome to our Streamlit Web Development Lab03 app! You can navigate between the pages using the sidebar to the left. The following pages are:
 
 1. **plantExplorer**: This page allows you to learn more about any plant you may have an interest in. Simply create a Trefle account, insert your API token, and provide a plant name and the code will take care of the rest! Learn more about the family, names, genus, and family distribution of any plant!
-2.
+2. **Sprout, the Plant Chatbot**: Explore new possibilities and knowledge with Sprout, your new chatbot friend!
 3.
 4.
 
