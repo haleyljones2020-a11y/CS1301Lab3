@@ -24,6 +24,8 @@ import streamlit as st
 from google import genai
 from google.genai import types
 from google.genai import errors as genai_errors
+import google.generativeai as genai
+import os
 
 
 # --------------------------------------------------------------------------
