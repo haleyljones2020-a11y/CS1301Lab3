@@ -6,29 +6,24 @@ overall theme as Page 1 (plants / gardening) WITHOUT calling the Trefle API
 or any external plant-data API. All plant knowledge here comes from the
 Gemini LLM itself, not from Page 1's data source.
 
+Uses the new unified Google Gen AI SDK (the `google-genai` package). The
+older `google-generativeai` package is fully deprecated and no longer
+receives updates, which is why old model names like "gemini-2.5-flash"
+started returning 404 errors for new users/keys.
+
 Requirements covered:
   - Try/Except error handling around every Gemini call (rate limits, safety
-    blocks, network issues) so the app can never crash from a Gemini error.
-  - Conversation memory across turns using st.session_state + Gemini's
-    chat-session history.
+    blocks, bad model names, network issues) so the app can never crash
+    from a Gemini error.
+  - Conversation memory across turns using st.session_state + a persistent
+    genai chat session.
   - Same theme as Page 1 (plants/gardening) but no API-from-page-1 data.
 """
 
 import streamlit as st
-import google.generativeai as genai
-
-# google-api-core exceptions aren't guaranteed to be importable on every
-# version of the google-generativeai package, so we fall back gracefully.
-try:
-    from google.api_core.exceptions import (
-        ResourceExhausted,
-        GoogleAPIError,
-        InvalidArgument,
-    )
-except ImportError:  # pragma: no cover - defensive fallback
-    ResourceExhausted = Exception
-    GoogleAPIError = Exception
-    InvalidArgument = Exception
+from google import genai
+from google.genai import types
+from google.genai import errors as genai_errors
 
 
 # --------------------------------------------------------------------------
@@ -67,13 +62,25 @@ api_key = st.sidebar.text_input(
 
 model_name = st.sidebar.selectbox(
     "Gemini model",
-    ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
+    [
+        "gemini-flash-latest",   # alias Google keeps pointed at its current
+                                  # recommended Flash model -- most resistant
+                                  # to future deprecation/renames.
+        "gemini-3.5-flash",
+        "gemini-3.1-pro",
+        "gemini-2.5-flash-lite",
+    ],
     index=0,
-    help="Flash models are faster and cheaper; Pro is more capable.",
+    help=(
+        "'gemini-flash-latest' auto-updates to Google's current Flash "
+        "model, so it's less likely to break when models are retired. "
+        "The others are specific pinned model versions."
+    ),
 )
 
 if st.sidebar.button("🔄 Reset conversation"):
     st.session_state.pop("chat_session", None)
+    st.session_state.pop("chat_session_key", None)
     st.session_state.pop("display_messages", None)
     st.rerun()
 
@@ -82,25 +89,30 @@ if not api_key:
     st.stop()
 
 # --------------------------------------------------------------------------
-# Configure Gemini + set up (or reuse) a persistent chat session
+# Configure the Gen AI client + set up (or reuse) a persistent chat session
 # --------------------------------------------------------------------------
 try:
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(
-        model_name=model_name,
-        system_instruction=SYSTEM_PROMPT,
-    )
+    client = genai.Client(api_key=api_key)
 except Exception as e:
-    st.error(f"Couldn't initialize the Gemini model: {e}")
+    st.error(f"Couldn't initialize the Gemini client: {e}")
     st.stop()
 
-# "chat_session" holds Gemini's own memory of the conversation so it can
-# refer back to earlier turns. "display_messages" is what we render on
-# screen. Both persist in session_state across reruns, which is how the
-# chatbot remembers prior conversation turns.
-if "chat_session" not in st.session_state:
+# If the user switches models in the sidebar, start a fresh chat session for
+# that model rather than reusing one bound to a different model.
+session_key = f"{model_name}"
+if (
+    "chat_session" not in st.session_state
+    or st.session_state.get("chat_session_key") != session_key
+):
     try:
-        st.session_state.chat_session = model.start_chat(history=[])
+        st.session_state.chat_session = client.chats.create(
+            model=model_name,
+            config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT),
+        )
+        st.session_state.chat_session_key = session_key
+    except genai_errors.APIError as e:
+        st.error(f"Couldn't start a new chat session with '{model_name}': {e}")
+        st.stop()
     except Exception as e:
         st.error(f"Couldn't start a new chat session: {e}")
         st.stop()
@@ -138,15 +150,17 @@ if user_prompt:
 
         reply_text = None
         try:
-            # send_message() uses the chat_session's internal history, so
+            # send_message() uses the chat session's internal history, so
             # Gemini "remembers" everything said earlier in this session.
             response = st.session_state.chat_session.send_message(user_prompt)
 
-            # Accessing .text can itself raise if the response was blocked
-            # by Gemini's safety filters (e.g. inappropriate content), so
-            # this needs its own try/except separate from network errors.
+            # Accessing .text can itself raise (or come back empty) if the
+            # response was blocked by Gemini's safety filters, so this gets
+            # its own try/except separate from network/API errors.
             try:
                 reply_text = response.text
+                if not reply_text:
+                    raise ValueError("empty response")
             except (ValueError, AttributeError):
                 block_reason = None
                 try:
@@ -160,21 +174,27 @@ if user_prompt:
                     + ". Let's keep chatting about plants and gardening!"
                 )
 
-        except ResourceExhausted:
-            reply_text = (
-                "⏳ I'm getting a lot of requests right now and hit a rate "
-                "limit. Please wait a moment and try again."
-            )
-        except InvalidArgument as e:
-            reply_text = (
-                "⚠️ There was a problem with that request (it may have been "
-                f"too long or malformed). Details: {e}"
-            )
-        except GoogleAPIError as e:
-            reply_text = f"⚠️ The Gemini API returned an error: {e}"
+        except genai_errors.APIError as e:
+            # Covers ClientError/ServerError subclasses from the Gen AI SDK,
+            # including rate limits (429), bad/retired model names (404),
+            # and malformed requests (400).
+            code = getattr(e, "code", None)
+            if code == 429:
+                reply_text = (
+                    "⏳ I'm getting a lot of requests right now and hit a "
+                    "rate limit. Please wait a moment and try again."
+                )
+            elif code == 404:
+                reply_text = (
+                    "⚠️ The selected model isn't available right now. Try "
+                    "picking a different model in the sidebar."
+                )
+            else:
+                reply_text = f"⚠️ The Gemini API returned an error: {e}"
         except Exception as e:
-            # Final safety net: no matter what goes wrong, the app should
-            # never crash -- always show a friendly message instead.
+            # Final safety net: no matter what goes wrong (network hiccup,
+            # unexpected SDK change, etc.), the app should never crash --
+            # always show a friendly message instead.
             reply_text = (
                 "⚠️ Something unexpected went wrong while talking to Sprout. "
                 f"({e}) Please try again."
@@ -188,7 +208,8 @@ if user_prompt:
 
 st.divider()
 st.caption(
-    "Sprout is powered by the Google Gemini API and stays focused on the "
-    "same plant/gardening theme as the Plant Explorer page, but does not "
-    "use the Trefle API or any data from that page."
+    "Sprout is powered by the Google Gemini API (via the google-genai SDK) "
+    "and stays focused on the same plant/gardening theme as the Plant "
+    "Explorer page, but does not use the Trefle API or any data from that "
+    "page."
 )
