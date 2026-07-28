@@ -24,7 +24,6 @@ import streamlit as st
 from google import genai
 from google.genai import types
 from google.genai import errors as genai_errors
-import os
 
 
 # --------------------------------------------------------------------------
@@ -64,22 +63,24 @@ api_key = st.sidebar.text_input(
 model_name = st.sidebar.selectbox(
     "Gemini model",
     [
-        "gemini-flash-latest",   # alias Google keeps pointed at its current
-                                  # recommended Flash model -- most resistant
-                                  # to future deprecation/renames.
+        "gemini-3-flash-preview",  # free-tier model
+        "gemini-flash-latest",     # alias Google keeps pointed at its
+                                    # current recommended Flash model --
+                                    # most resistant to future deprecations.
         "gemini-3.5-flash",
-        "gemini-3.1-pro",
         "gemini-2.5-flash-lite",
     ],
     index=0,
     help=(
+        "'gemini-3-flash-preview' is the free-tier model. "
         "'gemini-flash-latest' auto-updates to Google's current Flash "
-        "model, so it's less likely to break when models are retired. "
-        "The others are specific pinned model versions."
+        "model, so it's less likely to break when models get retired."
     ),
 )
 
 if st.sidebar.button("🔄 Reset conversation"):
+    st.session_state.pop("genai_client", None)
+    st.session_state.pop("genai_client_key", None)
     st.session_state.pop("chat_session", None)
     st.session_state.pop("chat_session_key", None)
     st.session_state.pop("display_messages", None)
@@ -92,11 +93,27 @@ if not api_key:
 # --------------------------------------------------------------------------
 # Configure the Gen AI client + set up (or reuse) a persistent chat session
 # --------------------------------------------------------------------------
-try:
-    client = genai.Client(api_key=api_key)
-except Exception as e:
-    st.error(f"Couldn't initialize the Gemini client: {e}")
-    st.stop()
+# IMPORTANT: the client is cached in session_state (keyed by api_key) rather
+# than being recreated on every rerun. If a new client were created each
+# rerun, the OLD client object (still referenced internally by the saved
+# chat session) would get garbage-collected -- which closes its underlying
+# HTTP connection -- causing "Cannot send a request, as the client has been
+# closed" errors on the next message.
+if (
+    "genai_client" not in st.session_state
+    or st.session_state.get("genai_client_key") != api_key
+):
+    try:
+        st.session_state.genai_client = genai.Client(api_key=api_key)
+        st.session_state.genai_client_key = api_key
+        # Any existing chat session was tied to the old client, so drop it.
+        st.session_state.pop("chat_session", None)
+        st.session_state.pop("chat_session_key", None)
+    except Exception as e:
+        st.error(f"Couldn't initialize the Gemini client: {e}")
+        st.stop()
+
+client = st.session_state.genai_client
 
 # If the user switches models in the sidebar, start a fresh chat session for
 # that model rather than reusing one bound to a different model.
