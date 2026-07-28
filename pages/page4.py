@@ -118,7 +118,7 @@ if user_prompt:
         placeholder.markdown(reply_text)
     st.session_state.display_messages.append({"role":"assistant", "content":reply_text})
 
-st.write(---)
+st.divider()
 st.caption("Sprout is powered by a Google Gemini API which uses plant information gathered from the Trefle API to provide you with personalized plant advice!")
                 
         
