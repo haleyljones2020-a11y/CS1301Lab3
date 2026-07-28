@@ -224,10 +224,5 @@ if user_prompt:
         {"role": "assistant", "content": reply_text}
     )
 
-st.divider()
-st.caption(
-    "Sprout is powered by the Google Gemini API (via the google-genai SDK) "
-    "and stays focused on the same plant/gardening theme as the Plant "
-    "Explorer page, but does not use the Trefle API or any data from that "
-    "page."
+
 )
