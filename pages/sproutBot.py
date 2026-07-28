@@ -34,8 +34,7 @@ st.set_page_config(page_title="Sprout - Plant Chatbot", page_icon="🌱")
 st.title("🌱 Sprout — Your Plant Care Chat Buddy")
 st.write(
     "Chat with **Sprout**, an AI gardening and houseplant-care assistant. "
-    "This page uses the Google Gemini API directly — it does **not** pull "
-    "any data from the Trefle API used on the Plant Explorer page."
+
 )
 
 SYSTEM_PROMPT = (
