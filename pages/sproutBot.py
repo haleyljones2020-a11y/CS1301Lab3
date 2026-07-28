@@ -223,6 +223,9 @@ if user_prompt:
     st.session_state.display_messages.append(
         {"role": "assistant", "content": reply_text}
     )
-
+ 
+st.divider()
+st.caption(
+    "Thank you for chatting with Sprout!
 
 )
